@@ -1,0 +1,41 @@
+-- Phase 3: schema for filings + chunks + indexes (HNSW, GIN, btree).
+-- Loaded by docker-compose at first container start via /docker-entrypoint-initdb.d.
+--
+-- The actual CREATE TABLE / CREATE INDEX statements land in Phase 3. Sketch:
+--
+--   CREATE EXTENSION IF NOT EXISTS vector;
+--
+--   CREATE TABLE filings (
+--       id            SERIAL PRIMARY KEY,
+--       cik           TEXT NOT NULL,
+--       ticker        TEXT NOT NULL,
+--       company_name  TEXT NOT NULL,
+--       fiscal_year   INT  NOT NULL,
+--       filing_date   DATE NOT NULL,
+--       doc_type      TEXT NOT NULL DEFAULT '10-K',
+--       source_url    TEXT NOT NULL,
+--       raw_text_path TEXT,
+--       UNIQUE (ticker, fiscal_year, doc_type)
+--   );
+--
+--   CREATE TABLE chunks (
+--       id           BIGSERIAL PRIMARY KEY,
+--       filing_id    INT NOT NULL REFERENCES filings(id) ON DELETE CASCADE,
+--       ticker       TEXT NOT NULL,           -- denormalized for fast filtering
+--       fiscal_year  INT  NOT NULL,           -- denormalized for fast filtering
+--       section      TEXT NOT NULL,
+--       chunk_index  INT  NOT NULL,
+--       text         TEXT NOT NULL,
+--       token_count  INT  NOT NULL,
+--       embedding    vector(768),
+--       tsv          tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
+--       metadata     jsonb DEFAULT '{}'::jsonb,
+--       UNIQUE (filing_id, chunk_index)
+--   );
+--
+--   CREATE INDEX chunks_embedding_hnsw
+--       ON chunks USING hnsw (embedding vector_cosine_ops)
+--       WITH (m = 16, ef_construction = 64);
+--
+--   CREATE INDEX chunks_tsv_gin       ON chunks USING gin (tsv);
+--   CREATE INDEX chunks_ticker_year   ON chunks (ticker, fiscal_year);

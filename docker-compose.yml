@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: secrag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-secrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secrag}
+      POSTGRES_DB: ${POSTGRES_DB:-secrag}
+    ports:
+      - "5432:5432"
+    volumes:
+      - secrag_pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-secrag} -d ${POSTGRES_DB:-secrag}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  secrag_pgdata:

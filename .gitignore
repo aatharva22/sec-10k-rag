@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# uv
+.python-version
+
+# Data — downloaded filings are large and reproducible from EDGAR
+data/filings/*
+!data/filings/.gitkeep
+data/filings/manifest.json
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+web/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

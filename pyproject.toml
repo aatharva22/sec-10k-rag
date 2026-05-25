@@ -1,0 +1,35 @@
+[project]
+name = "sec-rag"
+version = "0.1.0"
+description = "Hybrid RAG over SEC 10-K filings (AAPL, MSFT, AMZN, TSLA, NVDA)."
+requires-python = ">=3.11"
+dependencies = [
+    # --- HTTP / SEC ingestion ---
+    "httpx>=0.27",
+    # --- HTML parsing ---
+    "selectolax>=0.3.21",         # fast primary parser
+    "beautifulsoup4>=4.12",       # fallback for malformed iXBRL
+    # --- Chunking ---
+    "tiktoken>=0.7",              # token-count proxy for sizing chunks
+    # --- LLM / Embeddings ---
+    "google-genai>=0.3",          # official Gemini SDK
+    # --- Postgres ---
+    "psycopg[binary,pool]>=3.2",  # v3 driver + connection pool
+    # --- API ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    # --- Misc ---
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+# Dev tools kept minimal — no test framework yet (one smoke test per phase).
+dev-dependencies = [
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
