@@ -43,7 +43,37 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 ---
 
-## Phase 1 — Ingestion *(to be appended)*
+## Phase 1 — Ingestion
+
+### 15 parallel subagents (one per ticker × fiscal_year), not one asyncio script
+**Choice:** Fanned out 15 Claude Code subagents in parallel. Each agent independently fetched the submissions JSON, located the 10-K, downloaded the primary HTML, and returned a structured manifest entry.
+**Why:** Cheap to try (the user asked for it), each agent has isolated context so a weird per-filing edge case doesn't poison the others, and ~15 independent ~20s downloads complete in roughly the time of one. Aggregation back in the parent is trivial — just parse 15 JSON lines.
+**Tradeoff:** Zero HTTP connection reuse across agents, 15× prompt-evaluation overhead, harder to re-run deterministically. For a one-shot bootstrap that's fine; if we ever need to re-download or re-verify, `ingestion/download_filings.py` will become a real `httpx.AsyncClient`-based script that reads `manifest.json` as the source of truth.
+
+### Hardcoded CIKs instead of resolving from `company_tickers.json`
+**Choice:** Pass each subagent the CIK directly (e.g. AAPL → 0000320193).
+**Why:** CIKs don't change. Skipping the lookup removes one round trip per ticker and one possible failure mode (the company_tickers.json shape isn't great — it's an object keyed by integer strings). Documented in the subagent prompts so the choice is visible.
+**Tradeoff:** Adding a new ticker requires editing a constant. Worth it for 5 tickers.
+
+### Match 10-K by `reportDate` year, not by `filingDate` year
+**Choice:** "Fiscal year N" = the 10-K whose `reportDate` starts with `N` in the submissions JSON.
+**Why:** Filing dates lag fiscal-year-end by 2–3 months and lag varies by company. TSLA FY2022 was filed in Jan 2023; AAPL FY2022 was filed in Oct 2022. Filtering by `filingDate` would mix fiscal years. `reportDate` is the period end — that's the canonical fiscal-year anchor.
+**Tradeoff:** Companies that change fiscal-year-end mid-life would confuse this — none of our 5 have done so recently.
+
+### Filename scheme: `data/filings/{TICKER}/{fiscal_year}.html`
+**Choice:** Two levels (ticker dir, year file) rather than a flat `AAPL_2023_10K.html`.
+**Why:** `ls data/filings/AAPL/` is the natural way to see all of one company's filings. The flat scheme would scatter related files alphabetically and complicate per-ticker globbing in Phase 2.
+**Tradeoff:** None meaningful.
+
+### Commit `manifest.json` but gitignore the HTML
+**Choice:** `.gitignore` keeps `manifest.json` tracked; the multi-megabyte HTML files stay local-only and are reproducible from the URLs + sha256s in the manifest.
+**Why:** The manifest is the *proof* of which exact filings we used — useful for interview review and for anyone re-running the pipeline. The HTML bloats the repo unnecessarily (~55 MB total) and is reproducible.
+**Tradeoff:** Someone cloning the repo can't run Phase 2 immediately — they need to re-download. The download script (when implemented) will validate against `manifest.json` sha256s so re-downloads are deterministic.
+
+### NVIDIA fiscal-year naming gotcha
+**Note (not a decision per se):** NVIDIA's fiscal year ends in late January. NVIDIA itself calls the 10-K filed in Feb 2024 (reportDate 2024-01-28) "Fiscal 2024". Our convention matches that: we group it under fiscal_year=2024 because reportDate year is 2024. This aligns with NVIDIA's own labeling and avoids confusing users who ask "What did NVIDIA say in FY2024?"
+
+
 
 ## Phase 2 — Parsing + chunking *(to be appended)*
 

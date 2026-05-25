@@ -14,10 +14,12 @@ __pycache__/
 # uv
 .python-version
 
-# Data — downloaded filings are large and reproducible from EDGAR
+# Data — downloaded filings are large and reproducible from EDGAR.
+# Keep manifest.json in git: it's the record of which exact filings we used
+# (URLs + sha256s for reproducibility); the HTML itself is gitignored.
 data/filings/*
 !data/filings/.gitkeep
-data/filings/manifest.json
+!data/filings/manifest.json
 
 # Node / Next.js
 node_modules/
