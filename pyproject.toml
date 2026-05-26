@@ -24,9 +24,9 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
-[tool.uv]
+[dependency-groups]
 # Dev tools kept minimal — no test framework yet (one smoke test per phase).
-dev-dependencies = [
+dev = [
     "ruff>=0.6",
 ]
 

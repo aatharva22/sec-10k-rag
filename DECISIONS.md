@@ -75,7 +75,50 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 
 
-## Phase 2 — Parsing + chunking *(to be appended)*
+## Phase 2 — Parsing + chunking
+
+### selectolax with regex preprocessing for iXBRL hidden facts
+**Choice:** Strip `<ix:hidden>`, `<ix:header>`, `<ix:references>`, `<ix:resources>` blocks with a regex BEFORE handing the HTML to selectolax, then drop `[style*="display:none"]` via selectolax CSS.
+**Why:** SEC iXBRL files start with hundreds of machine-readable XBRL "facts" (`false`, `2023`, `FY`, FASB taxonomy URLs) that aren't visible in a rendered filing but flood the text extraction. selectolax's HTML5 parser doesn't reliably target namespaced tags via CSS, so a regex pre-pass is the most robust way to remove them.
+**Tradeoff:** Two parse passes (regex + DOM). Negligible cost — strip cuts AAPL 2023 from 218k chars of mixed noise to 202k chars of real text.
+
+### Section dedup: keep the LAST `Item N.` match per code
+**Choice:** When `Item N.` appears more than once in the parsed text, keep only the latest occurrence as the section start.
+**Why:** 10-Ks frequently mention "Item 16" or "Item 1A" in the cautionary statements / forward-looking disclaimer at the top, which my regex was mis-identifying as a real section header. The actual section content always comes after the ToC. The simple "last occurrence wins" rule works because real sections appear at the end of the document in document order.
+**Tradeoff:** Fails if an Item is mentioned in a later section's body (e.g. Item 7 referencing Item 1A's risk factors) — the in-body reference would steal the section header. In practice modern 10-Ks reference items by full name ("Risk Factors", not "Item 1A.") so this hasn't bitten us across the 15 filings.
+
+### Section labels stay in chunk text, not just metadata
+**Choice:** Prepend `[Item 1A. Risk Factors]\n\n` to every chunk's text, in addition to storing the section as a metadata field on the Chunk.
+**Why:** Mid-section chunks otherwise have no context about which section they belong to. Adding the label inside the chunk text lets the embedding "see" the section topic, which helps queries like "Apple's risk factors" match chunks that don't contain those exact words. Costs ~10 tokens per chunk — negligible vs. 800-token chunks.
+**Tradeoff:** The very first chunk of each section has the heading twice (once prepended, once naturally at the top of the body). Tiny redundancy, not worth special-casing.
+
+### `MIN_SECTION_CHARS = 1000` to filter ToC entries
+**Choice:** Sections shorter than 1000 chars are dropped from the section list.
+**Why:** Even after dedup, some short fragments survive (e.g. when a heading appears in a copyright disclaimer paragraph). A real 10-K section is at least a few paragraphs (~1000 chars). The threshold drops ToC-like fragments without losing real content (the shortest legitimate section in our 15 filings is ~2000 chars).
+**Tradeoff:** If a filing has a genuinely tiny section ("Item 6: Reserved"), it gets dropped. Acceptable — those sections have no information value anyway.
+
+### Chunk math: 800 tokens / 80 overlap / cl100k_base proxy
+**Choice:** 800-token chunks with 80-token overlap, measured by `tiktoken cl100k_base`.
+**Why:** cl100k_base is not Gemini's tokenizer, but it's a close enough proxy for sizing chunks without per-chunk API calls. The chunk size leaves room for: top-5 chunks × 800 tokens = 4K context tokens, plus the question (~50 tokens), plus the system prompt (~200 tokens) — well within gemini-2.5-flash's 1M-token window with massive headroom for the answer.
+**Tradeoff:** Gemini's actual tokenizer counts may be 5–10% different. If we ever want true byte-perfect chunk sizing, we'd batch-call Gemini's `count_tokens`. Not worth the API hit for sizing.
+
+### Smoke-test results across 15 filings
+| ticker | year | text chars | sections | chunks |
+|---|---|---|---|---|
+| AAPL | 2022 | 217k | 10 | 65 |
+| AAPL | 2023 | 202k | 10 | 60 |
+| AAPL | 2024 | 206k | 13 | 64 |
+| AMZN | 2022–2024 | 271k–286k | 10–12 | 81–85 |
+| MSFT | 2022 | 394k | 14 | 103 |
+| MSFT | 2023 | 442k | 15 | 157 |
+| MSFT | 2024 | 462k | 15 | 163 |
+| NVDA | 2022–2024 | 309k–343k | 9–10 | 87–96 |
+| TSLA | 2022 | 489k | 12 | 162 |
+| TSLA | 2023 | 401k | 12 | 119 |
+| TSLA | 2024 | 389k | 11 | 115 |
+| **total** | | | | **1,533** |
+
+
 
 ## Phase 3 — Embedding + storage *(to be appended)*
 
