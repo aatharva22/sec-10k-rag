@@ -26,6 +26,43 @@ _ITEM_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# SEC-prescribed 10-K Item titles. Used to produce clean citation labels
+# regardless of how the filing's HTML lays out the heading visually.
+_CANONICAL_TITLES: dict[str, str] = {
+    "1": "Business",
+    "1A": "Risk Factors",
+    "1B": "Unresolved Staff Comments",
+    "1C": "Cybersecurity",
+    "2": "Properties",
+    "3": "Legal Proceedings",
+    "4": "Mine Safety Disclosures",
+    "5": "Market for Registrant's Common Equity, Related Stockholder Matters and Issuer Purchases of Equity Securities",
+    "6": "[Reserved]",
+    "7": "Management's Discussion and Analysis of Financial Condition and Results of Operations",
+    "7A": "Quantitative and Qualitative Disclosures About Market Risk",
+    "8": "Financial Statements and Supplementary Data",
+    "9": "Changes in and Disagreements with Accountants on Accounting and Financial Disclosure",
+    "9A": "Controls and Procedures",
+    "9B": "Other Information",
+    "9C": "Disclosure Regarding Foreign Jurisdictions That Prevent Inspections",
+    "10": "Directors, Executive Officers and Corporate Governance",
+    "11": "Executive Compensation",
+    "12": "Security Ownership of Certain Beneficial Owners and Management and Related Stockholder Matters",
+    "13": "Certain Relationships and Related Transactions, and Director Independence",
+    "14": "Principal Accountant Fees and Services",
+    "15": "Exhibit and Financial Statement Schedules",
+    "16": "Form 10-K Summary",
+}
+
+# Canonical document order for a 10-K. Used to drop matches that violate the
+# expected sequence (e.g. an "Item 11" matched at the table of contents but
+# positioned before "Item 1" in the body).
+_CANONICAL_ORDER: list[str] = [
+    "1", "1A", "1B", "1C", "2", "3", "4",
+    "5", "6", "7", "7A", "8", "9", "9A", "9B", "9C",
+    "10", "11", "12", "13", "14", "15", "16",
+]
+
 _ENC = tiktoken.get_encoding("cl100k_base")
 
 
@@ -43,19 +80,50 @@ def split_into_sections(text: str) -> list[tuple[str, str]]:
     matches = list(_ITEM_RE.finditer(text))
     if not matches:
         return []
-    # Dedup by Item code: the LAST occurrence is the real section header. Earlier
-    # mentions are typically table-of-contents entries or in-text references.
-    by_code: dict[str, re.Match[str]] = {}
-    for m in matches:
-        by_code[m.group(1).upper()] = m
-    ordered = sorted(by_code.values(), key=lambda m: m.start())
+    # Some filings (MSFT especially) embed page-header repetitions like
+    # "PART I, Item 1. Business" on every printed page, so a single Item code
+    # can match 10+ times. Worse, the ToC at the top lists every Item with its
+    # page number, which also matches. The "real" section header is the match
+    # with the LARGEST gap to the next match — page headers are tightly packed
+    # within a section, and ToC entries are tightly packed near the top.
+    matches_sorted = sorted(matches, key=lambda m: m.start())
+    with_gap: list[tuple[re.Match[str], int]] = []
+    for i, m in enumerate(matches_sorted):
+        next_start = (
+            matches_sorted[i + 1].start() if i + 1 < len(matches_sorted) else len(text)
+        )
+        with_gap.append((m, next_start - m.start()))
+
+    best_per_code: dict[str, tuple[re.Match[str], int]] = {}
+    for m, gap in with_gap:
+        code = m.group(1).upper()
+        if code not in best_per_code or gap > best_per_code[code][1]:
+            best_per_code[code] = (m, gap)
+
+    # Walk in canonical 10-K order and enforce strictly increasing document
+    # positions. A candidate whose position is before the previous accepted
+    # item's position is a ToC/header artifact (e.g. "Item 11" matching only
+    # at the ToC at position 200 when Item 1 is at position 5000+).
+    chosen: list[tuple[re.Match[str], int]] = []
+    cursor_pos = -1
+    for code in _CANONICAL_ORDER:
+        entry = best_per_code.get(code)
+        if entry is None:
+            continue
+        m, _ = entry
+        if m.start() <= cursor_pos:
+            continue  # out-of-order — likely a ToC fragment
+        chosen.append(entry)
+        cursor_pos = m.start()
+
     sections: list[tuple[str, str]] = []
-    for i, m in enumerate(ordered):
+    for i, (m, _) in enumerate(chosen):
         item_code = m.group(1).upper()
-        title = m.group(2).strip().rstrip(".")
+        canonical = _CANONICAL_TITLES.get(item_code)
+        title = canonical or m.group(2).strip().rstrip(".")
         label = f"Item {item_code}. {title}"
         start = m.start()
-        end = ordered[i + 1].start() if i + 1 < len(ordered) else len(text)
+        end = chosen[i + 1][0].start() if i + 1 < len(chosen) else len(text)
         body = text[start:end].strip()
         if len(body) >= MIN_SECTION_CHARS:
             sections.append((label, body))

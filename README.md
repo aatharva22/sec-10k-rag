@@ -31,9 +31,9 @@ question ──► query_parser (extract ticker, fiscal_year)
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Scaffold | ✅ done |
-| 1 | Ingestion (15 10-Ks from EDGAR) | ⏳ next |
-| 2 | Parse + chunk | — |
-| 3 | Embed + store + indexes | — |
+| 1 | Ingestion (15 10-Ks from EDGAR) | ✅ done |
+| 2 | Parse + chunk (selectolax + canonical-title chunker) | ✅ done |
+| 3 | Embed + store + indexes | ⏳ 8/15 filings done; rest blocked on Gemini free-tier daily quota reset |
 | 4 | Retrieval service (hybrid + RRF) | — |
 | 5 | Generation service (Gemini, swappable) | — |
 | 6 | FastAPI wiring | — |

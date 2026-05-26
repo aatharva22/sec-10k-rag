@@ -120,7 +120,70 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 
 
-## Phase 3 — Embedding + storage *(to be appended)*
+## Phase 3 — Embedding + storage
+
+### Switched embedding model: `gemini-embedding-001` → `gemini-embedding-2`
+**Context:** The original spec called for `gemini-embedding-001, free tier, 768 dims`. In practice that model returns 429 RESOURCE_EXHAUSTED on a free-tier API key — it's gated to paid plans. `text-embedding-004` (the obvious fallback) wasn't in the model list for this key either; it's been deprecated. The available free-tier embedding model is `gemini-embedding-2`, which is *newer* than 001 — Google's current general-purpose embedding family.
+**Choice:** Use `gemini-embedding-2` with `output_dimensionality=768` (MRL truncation from 3072).
+**Why:** Free tier accessible. Matches the existing `vector(768)` column without schema change. Newer architecture than 001. Task-type API (`RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`) works identically.
+**Tradeoff:** "Experimental"-adjacent — Google has churned this family fast. If `gemini-embedding-2` is later deprecated, re-embedding is a single-config change and one pipeline re-run. Worth flagging in the README so future readers know why it changed.
+
+### `embed_content` does NOT batch — discovered the hard way
+**Bug found:** The google-genai SDK's `client.models.embed_content(contents=[t1, t2, ..., t50])` accepts a list, but the API treats the list as multiple *parts* of a SINGLE Content and returns ONE embedding. My initial "batch of 50" was embedding only the first text and discarding 49 — the assertion `len(chunks) == len(embeddings)` caught it.
+**Choice:** Serial loop, one chunk per `embed_content` call, with `MIN_INTERVAL_SEC = 0.5` (~120 RPM ceiling) and exponential backoff on 429.
+**Why:** True batching requires `asyncBatchEmbedContent` — an async batch-job endpoint that returns results later via polling. For 1,533 chunks, a 25-minute serial loop with retries is far simpler than orchestrating a batch job.
+**Tradeoff:** Slow first-time ingest. On re-runs the `_already_ingested` check skips processed filings, so the only cost is the initial bootstrap.
+
+### Daily free-tier cap hit at chunk 778 (8/15 filings)
+**What happened:** Mid-ingest, the pipeline started seeing persistent `RESOURCE_EXHAUSTED` errors that survived the full retry+backoff chain (up to 126s). The error detail revealed the cause: `EmbedContentRequestsPerDayPerUserPerProjectPerModel-FreeTier, limit: 1000`. We've burned through the day's 1000 free-tier embed calls.
+**State when stopped:** AAPL × 3, MSFT × 3, AMZN × 2 = 8 filings, 778 chunks in DB. Missing: AMZN 2024, TSLA × 3, NVDA × 3.
+**Plan:** Wait for the daily quota to reset (midnight Pacific). Tomorrow: drop the existing chunks (they were embedded with the v1 chunker that had the MSFT bug — see next entry), re-ingest all 15 filings with the fixed chunker. Total cost: ~1,533 embed calls — within the 1,000/day cap *only if* we resume within 24 hours of reset and don't hit the daily cap again. If we do, finish over two days.
+
+### MSFT chunker bug → fix: canonical title lookup + ordering enforcement
+**Bug:** The v1 chunker used `Item N.` regex matches + `last-occurrence-wins` dedup. That works for filings like AAPL where Item codes appear only in the ToC and at the real section header. But MSFT's HTML preserves *per-page header repetitions* (`PART I, Item 1. Business` on every printed page), so a single Item code had 10+ matches and `last-occurrence` picked a header *inside* the wrong section. The result: `Item 1. AVAILABLE INFORMATION` as a section label, with the body actually spanning past the real Item 1.
+**Fix, in three layers:**
+1. **Largest-body wins** instead of last-occurrence. For each Item code, pick the match whose distance to the next match is biggest — real section starts have a long stretch of content, while ToC entries and page-headers are tightly packed.
+2. **Canonical title lookup.** SEC mandates the title for each 10-K Item ("Risk Factors" for 1A, "Properties" for 2, etc.). The chunker now uses a hardcoded `_CANONICAL_TITLES` map for the label instead of trying to extract the title from text, which is unreliable across filing layouts. Citations stay clean regardless of HTML quirks.
+3. **Canonical-order enforcement.** After picking matches, walk the canonical 10-K Item order (`1, 1A, 1B, 1C, 2, 3, 4, 5, 6, 7, 7A, 8, 9, 9A, 9B, 9C, 10-16`) and keep only matches whose position is strictly increasing. Drops ToC-only "phantom" items (e.g., AAPL's Item 11 appears only in the ToC because Apple references the proxy statement).
+**Tradeoff:** If the SEC ever changes the Item layout (e.g., adds a new Item 1D), the canonical title map needs updating. Acceptable — the SEC changes 10-K structure roughly once a decade and the map is one dict.
+
+### Free-tier rate limit observed: ~30-40 RPM
+**Note:** With `MIN_INTERVAL_SEC = 0.5` (target 120 RPM), I observed 429 RESOURCE_EXHAUSTED hitting every ~25-30 successful calls. The retry/backoff recovered cleanly each time. Bumping the interval to 1.5-2.0s would eliminate most retries but slow ingest proportionally; the current setting is the right speed/cleanliness trade-off for a one-time bootstrap.
+
+### Per-chunk embedding cost: ~1.1 seconds wall-clock (incl. retries)
+**Observation:** AAPL FY2023 (60 chunks) took 66.8s end-to-end. With 1,533 total chunks across 15 filings, expect ~28 minutes for the full ingest.
+
+### pgvector HNSW with `vector_cosine_ops`
+**Choice:** `CREATE INDEX ... USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64)`.
+**Why:** Gemini embeddings come out roughly unit-normalized, so cosine ≈ dot product. Cosine is the established convention for retrieval embeddings; choosing it over L2 means downstream code can think in terms of similarity (1 - distance) rather than distance. `m=16, ef_construction=64` are pgvector defaults — our 1.5K-row corpus is far too small for tuning to matter.
+**Tradeoff:** HNSW uses more memory than IVFFlat at build time. Negligible at our scale.
+
+### `tsvector` as a `GENERATED ALWAYS AS ... STORED` column
+**Choice:** Postgres 12+ generated column auto-populates `tsv` from `text`. No INSERT-time work in Python.
+**Why:** One less thing to forget on insert. Trigger-based approaches need extra DDL and can desync if disabled. Generated columns are always in sync with the source.
+**Tradeoff:** `to_tsvector('english', text)` runs on every insert and update, slightly slowing writes. Imperceptible for our once-per-filing insert.
+
+### Idempotent inserts via `UNIQUE (filing_id, chunk_index)` + `ON CONFLICT DO NOTHING`
+**Choice:** The unique constraint on `(filing_id, chunk_index)` is what lets `ON CONFLICT DO NOTHING` work on the chunks table.
+**Why:** Re-running the pipeline (after a crash, a model swap, a chunker change) should never duplicate chunks or fail. With the constraint + ON CONFLICT, a partial re-run is safe.
+**Tradeoff:** If we re-chunk and the new chunks have the same `chunk_index` as old ones, they're silently skipped. The `--force` flag in `pipeline.py` is the escape hatch (it re-runs anyway; cleanup needs a separate `DELETE FROM chunks WHERE filing_id=...`).
+
+### Skip pre-ingested filings by default
+**Choice:** `pipeline.py` checks `SELECT 1 FROM chunks WHERE ticker=$1 AND fiscal_year=$2 LIMIT 1` before each filing; if a chunk exists, the filing is skipped.
+**Why:** Embedding is the expensive step (~28 min for the full corpus). Skipping done filings turns a partial-run recovery from "wait 28 minutes again" into "wait for the remaining N".
+**Tradeoff:** If a filing was *partially* embedded (e.g. crashed mid-loop), the check still skips it. The `--force` flag re-runs from scratch; for partial states, manually `DELETE FROM chunks WHERE ticker=X AND fiscal_year=Y` first.
+
+### vector literal as a string (`'[0.1,0.2,...]'::vector`) — no pgvector Python package
+**Choice:** Serialize embeddings as pgvector text literals in `api/db.py:vector_literal`, cast to `vector` in SQL.
+**Why:** Avoids a runtime dep on the `pgvector` Python package and its psycopg adapter. The serialization is trivial (one line) and pgvector parses the literal natively.
+**Tradeoff:** A tiny bit of CPU on serialization; readability tradeoff. Worth it for one fewer dep.
+
+### Denormalize `ticker`, `fiscal_year` onto `chunks`
+**Choice:** Copy these fields from `filings` to every chunk row, indexed via btree.
+**Why:** The retrieval hot path is `WHERE ticker=$1 AND fiscal_year=$2 ORDER BY embedding <=> $qvec LIMIT 20`. Denormalization keeps this single-table; otherwise every search joins through `filings`. With 1,533 rows the join cost is invisible, but the point is keeping the SQL legible.
+**Tradeoff:** If a company ever changes ticker (rare), we'd need to rewrite the denormalized columns. Not a concern for our 5 fixed tickers.
+
+
 
 ## Phase 4 — Retrieval *(to be appended)*
 
