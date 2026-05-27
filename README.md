@@ -34,7 +34,7 @@ question ──► query_parser (extract ticker, fiscal_year)
 | 1 | Ingestion (15 10-Ks from EDGAR) | ✅ done |
 | 2 | Parse + chunk (selectolax + canonical-title chunker) | ✅ done |
 | 3 | Embed + store + indexes | done (15/15 filings, 1,531 chunks) |
-| 4 | Retrieval service (hybrid + RRF) | — |
+| 4 | Retrieval service (hybrid + RRF) | done |
 | 5 | Generation service (Gemini, swappable) | — |
 | 6 | FastAPI wiring | — |
 | 7 | Next.js chat UI | — |

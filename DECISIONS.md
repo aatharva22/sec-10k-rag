@@ -192,7 +192,32 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 ---
 
-## Phase 4 — Retrieval *(to be appended)*
+## Phase 4 — Retrieval
+
+### Reciprocal Rank Fusion (k=60) over BM25 + vector top-20 each
+**Choice:** Two independent SELECTs against `chunks` — one BM25 (`ts_rank_cd(tsv, plainto_tsquery(...))`), one vector (`embedding <=> qvec`) — each returning the top 20 ids, fused with RRF and re-sliced to top-5.
+**Why:** RRF is the standard hybrid-fusion recipe (Cormack et al. 2009) and it sidesteps the score-normalization problem entirely — BM25 returns unbounded ranks, cosine returns 0–2 distances, and trying to linearly combine those is brittle. RRF only consumes ranks: `score = 1 / (k + rank)` per ranker, summed. With `k=60` (the published default), a doc that ranks #1 in both retrievers scores ~0.033; one in only the vector list scores ~0.016 — natural decay, no tuning required for the demo corpus.
+**Tradeoff:** RRF discards score magnitudes — a chunk that BM25 rates *much* higher than its neighbors loses that signal. For a corpus of 1.5K chunks and top-20 pools, the loss is invisible. On larger corpora we'd consider weighted-RRF or learned fusion.
+
+### POOL_SIZE = 20 per ranker
+**Choice:** Pull 20 from each ranker before fusion, return top-5 to the LLM.
+**Why:** 20 gives RRF enough overlap to discriminate (a doc has to appear well-ranked in *at least one* list to even be considered, and ideally ranks well in both). Pool of 10 was too tight — borderline-relevant chunks could miss the cutoff entirely. Pool of 50 added latency without changing top-5 in spot-checks.
+**Tradeoff:** With our pre-filter `WHERE tsv @@ plainto_tsquery(...)`, BM25 may return fewer than 20 rows for short questions — RRF handles that fine, but it's worth knowing if you debug a sparse fusion result.
+
+### Sync retrieval, not async
+**Choice:** `hybrid_search` is a plain function that runs the two SELECTs sequentially on one psycopg connection. The original docstring said `async def ... asyncio.gather(...)`.
+**Why:** On our 1.5K-chunk corpus each SELECT is sub-50ms. Two sequential queries on a warm connection take ~30-80ms total; spinning up async, opening two connections, and gathering would add ~30ms of overhead for ~20ms of theoretical parallelism. We'll revisit when Phase 6 adds the async psycopg pool — at that point the route handler itself is async and parallelism is essentially free, but the retrieval logic stays the same.
+**Tradeoff:** If we ever federate retrieval across multiple stores (e.g. add Elasticsearch alongside Postgres) async will be unavoidable. Not the case today.
+
+### Deterministic query parser, no LLM
+**Choice:** `query_parser.parse(question) -> (ticker, year)` using compiled regex for the 5 known tickers, 5 company-name keywords, and the 3 valid fiscal years. If multiple tickers or years are mentioned, the field returns None (caller falls back to corpus-wide retrieval).
+**Why:** The supported set is tiny and fixed. An LLM call would be ~500ms of latency and a non-deterministic failure mode for a job a regex does in microseconds. Returning None on ambiguity is honest — "Apple vs. Microsoft 2023" really *is* a cross-ticker question.
+**Tradeoff:** Misses creative aliases ("the iPhone maker", "Cupertino", "Big Tech"). For a demo where the user is shown the supported tickers, that's acceptable. If we ever broaden the corpus to S&P 500, we'd swap in an entity-recognition step.
+
+### Vector literal trick reused; no pgvector Python adapter
+**Note:** Same call as Phase 3 — `vector_literal(qvec)` produces a string and we cast `%s::vector` in SQL. Keeps Phase 4 dep-free.
+
+---
 
 ## Phase 5 — Generation *(to be appended)*
 
