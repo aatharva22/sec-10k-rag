@@ -108,12 +108,14 @@ def _rrf_fuse(bm25_ids: Sequence[int], vec_ids: Sequence[int]) -> list[int]:
 
 
 def _hydrate(cur, ids_in_order: list[int]) -> list[Chunk]:
-    """Fetch full chunk rows for the given ids, preserving the input order."""
+    """Fetch full chunk rows (with filing source_url) preserving input order."""
     cur.execute(
         """
-        SELECT id, filing_id, ticker, fiscal_year, section, chunk_index, text
-        FROM chunks
-        WHERE id = ANY(%s)
+        SELECT c.id, c.filing_id, c.ticker, c.fiscal_year, c.section,
+               c.chunk_index, c.text, f.source_url
+        FROM chunks c
+        JOIN filings f ON f.id = c.filing_id
+        WHERE c.id = ANY(%s)
         """,
         (ids_in_order,),
     )
@@ -132,6 +134,7 @@ def _hydrate(cur, ids_in_order: list[int]) -> list[Chunk]:
                 section=row[4],
                 chunk_index=row[5],
                 text=row[6],
+                source_url=row[7],
             )
         )
     return chunks

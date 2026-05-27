@@ -219,7 +219,39 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 ---
 
-## Phase 5 — Generation *(to be appended)*
+## Phase 5 — Generation
+
+### Gemini structured output (response_schema) over hand-parsing JSON
+**Choice:** `GenerateContentConfig(response_mime_type="application/json", response_schema=_LLMAnswer)` where `_LLMAnswer` is a Pydantic model. The SDK enforces the schema server-side; we just `_LLMAnswer.model_validate_json(resp.text)` on return.
+**Why:** Without `response_schema`, the model emits free-form JSON-ish text that needs a regex-cleanup + retry-on-malformed pass. The grammar-constrained decoding is essentially free quality and removes a class of "trailing commas / unescaped quotes" parse failures. Pydantic validation catches the remaining drift (wrong field types, missing fields) cheaply.
+**Tradeoff:** Tied to providers that support grammar-constrained decoding. Swapping to Anthropic would mean using tool-use for JSON enforcement or going back to instructed-JSON. The generation.py module is the *one* file to touch; everything else stays put.
+
+### Two-layer schema: `_LLMAnswer` (LLM-facing) vs `AnswerWithCitations` (public)
+**Choice:** The LLM is asked to return `_LLMAnswer { answer, citations: [{ chunk_id, quote }] }` — just the data only the model can produce. The public `AnswerWithCitations` carries the richer `Citation { chunk_id, ticker, fiscal_year, section, quote, source_url }`. `_build_response` joins the LLM's `chunk_id` back to the retrieved `Chunk` object to populate the extra fields.
+**Why:** Asking the LLM to copy ticker/year/section/url for each citation invites drift — the model would occasionally pluralize, abbreviate, or paraphrase metadata, and we'd never trust those fields. Re-deriving from the input `Chunk` makes them ground-truth by construction. We also drop any citation whose `chunk_id` isn't in the input set, which defends against hallucinated ids.
+**Tradeoff:** Two schemas instead of one. Trivial cost — the lookup is one dict access per citation.
+
+### System prompt enforces refusal verbatim and forbids outside knowledge
+**Choice:** The system prompt lists 5 short rules, including: "ground every claim in the provided excerpts", "respond with exactly: 'I don't have enough information in the provided 10-K excerpts to answer that.' and return an empty citations list" when context is insufficient.
+**Why:** A short rule list with one verbatim refusal string is what the model follows most reliably for grounded QA. Verified by the "What was the GDP of France in 2023?" smoke test — the parser pulls `year=2023` and runs corpus-wide retrieval, which surfaces 10-K chunks; the model still refuses because the rules tell it to, even though some text was returned.
+**Tradeoff:** A more elaborate prompt with examples might help borderline cases (e.g. partial-coverage questions). For the demo we keep the prompt short — easier to audit, fewer surface bugs.
+
+### `temperature=0.1`, not 0
+**Choice:** `temperature=0.1` on the Gemini call.
+**Why:** Zero temperature with grammar-constrained decoding can produce truncated answers when the model deterministically picks the highest-probability "end" token. A tiny amount of stochasticity gives the model breathing room to finish a sentence. Still effectively deterministic for a demo.
+**Tradeoff:** Two runs of the same question may differ by a word or two. Acceptable.
+
+### Refusal as the universal failure mode
+**Choice:** Empty chunks, JSON parse error, validation error, or unrecoverable API error all funnel to the same `REFUSAL` string with empty citations. The API failures log to stderr; the user sees the same polite "I don't have enough information…" message.
+**Why:** From the user's perspective the cause doesn't matter — they need an answer they can trust or a clear refusal. Mixing "no context" with "API timed out" responses leaks implementation detail and erodes confidence. Logs preserve the diagnostic info for us.
+**Tradeoff:** A persistent provider outage looks the same as repeatedly asking out-of-corpus questions. The `/health` route (Phase 6) will expose provider status separately for monitoring.
+
+### `gemini-2.5-flash` for generation
+**Choice:** Same as planned in Phase 0.
+**Why:** Fast (~1-3s for the 5-chunk grounded prompt), free-tier accessible, capable enough for grounded extraction over curated context. The `flash` family is tuned for exactly this kind of retrieval-augmented use.
+**Tradeoff:** For genuinely tricky multi-step reasoning over the citations, `gemini-2.5-pro` or `claude-opus-4-7` would be stronger. Single-file swap when needed.
+
+---
 
 ## Phase 6 — API *(to be appended)*
 

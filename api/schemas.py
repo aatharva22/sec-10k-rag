@@ -17,6 +17,7 @@ class Chunk(BaseModel):
     section: str
     chunk_index: int
     text: str
+    source_url: str | None = None
     score: float | None = None
 
 
