@@ -185,6 +185,13 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 
 
+### Phase 3 completion — remaining 7 filings ingested after quota reset
+**State now:** All 15 filings ingested. 1,531 chunks total in DB (vs. the 1,533 predicted by the smoke-test table — TSLA 2022 and 2024 each landed one chunk shorter on the re-chunk, an artifact of non-deterministic token-boundary nudging at section ends).
+**Run observations:** Resume took 1,694s (~28 min) for 7 filings × 753 chunks. Free-tier throttling fired sporadically (429s after streaks of ~25-50 successful calls), but exponential backoff (2→4s waits, never beyond retry 3) absorbed every one — no chunks lost, no quota-day cliff this time. `MIN_INTERVAL_SEC=1.5` ended up well-tuned: aggressive enough to finish in one sitting, conservative enough that the daily 1,000-call cap (now 753 + 778 from yesterday = 1,531 calls across two days) wasn't a risk.
+**What's next:** Phase 4 — retrieval. BM25 + vector search SQL is straightforward; the interesting work is the RRF fusion and the query parser that pulls `ticker` / `fiscal_year` filters out of the question.
+
+---
+
 ## Phase 4 — Retrieval *(to be appended)*
 
 ## Phase 5 — Generation *(to be appended)*

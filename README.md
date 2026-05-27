@@ -33,7 +33,7 @@ question ──► query_parser (extract ticker, fiscal_year)
 | 0 | Scaffold | ✅ done |
 | 1 | Ingestion (15 10-Ks from EDGAR) | ✅ done |
 | 2 | Parse + chunk (selectolax + canonical-title chunker) | ✅ done |
-| 3 | Embed + store + indexes | ⏳ 8/15 filings done; rest blocked on Gemini free-tier daily quota reset |
+| 3 | Embed + store + indexes | done (15/15 filings, 1,531 chunks) |
 | 4 | Retrieval service (hybrid + RRF) | — |
 | 5 | Generation service (Gemini, swappable) | — |
 | 6 | FastAPI wiring | — |
