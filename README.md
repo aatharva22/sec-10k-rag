@@ -36,7 +36,7 @@ question ──► query_parser (extract ticker, fiscal_year)
 | 3 | Embed + store + indexes | done (15/15 filings, 1,531 chunks) |
 | 4 | Retrieval service (hybrid + RRF) | done |
 | 5 | Generation service (Gemini, swappable) | done |
-| 6 | FastAPI wiring | — |
+| 6 | FastAPI wiring | done |
 | 7 | Next.js chat UI | — |
 | 8 | README polish + demo script | — |
 

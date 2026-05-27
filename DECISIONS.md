@@ -253,6 +253,28 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 ---
 
-## Phase 6 — API *(to be appended)*
+## Phase 6 — API
+
+### Sync handlers, no async psycopg pool
+**Choice:** Both routes are `def post_query` / `def get_health` (not `async def`). They call `retrieval.hybrid_search` and `generation.generate` directly. No connection pool — `sync_conn()` opens a fresh psycopg connection per request inside a `with` block.
+**Why:** FastAPI dispatches `def` handlers to its own anyio threadpool, so a slow handler doesn't block the event loop. At our scale (1.5K chunks, single-user demo), one connection open + several queries on the same cursor totals ~30-80ms — connection setup is a small fraction of the LLM call (~1-3s). A pool would shave ~30ms off each request and add a startup/shutdown lifecycle to maintain. We can introduce `psycopg_pool.ConnectionPool` later in a single-file edit to `api/db.py` without touching the routes.
+**Tradeoff:** Under genuine concurrent load the threadpool would become the bottleneck (defaults to 40 threads). For a Next.js front-end with one user this is invisible. Don't deploy this as-is to a multi-tenant service.
+
+### `/query` route is a thin pass-through to the three services
+**Choice:** `post_query` does five things: validate the question is non-empty (400 on blank), call `query_parser.parse`, call `retrieval.hybrid_search`, call `generation.generate`, return `QueryResponse`. Any unexpected exception logs the traceback and surfaces as a 503 with `"upstream failure — try again"`.
+**Why:** The pipeline contract was set in Phases 4 and 5 — the route doesn't need to make further decisions. Hiding the cause behind a generic 503 matches the same trust-preserving principle as the `REFUSAL` constant in generation: don't leak provider state. Logs preserve diagnostics for us.
+**Tradeoff:** A clever caller can't distinguish "Gemini quota exhausted" from "Postgres down". `/health` exposes db status separately; provider health is intentionally not surfaced. If we ever need to differentiate, add specific HTTPException raises per failure type — but a single 503 + good logging has been enough so far.
+
+### `/health` does both `SELECT 1` and `SELECT count(*) FROM chunks`
+**Choice:** Two queries in the health check — a connectivity probe (`SELECT 1`) and a corpus-presence probe (`SELECT count(*)`).
+**Why:** `SELECT 1` proves the connection works; `count(*) FROM chunks` proves the schema is initialized and ingestion ran. A new dev cloning the repo and forgetting to run ingestion sees `"chunks": 0` and knows what to do — without needing to dig into the database.
+**Tradeoff:** `count(*)` on a 1.5K row table is microseconds. On a 10M-row chunks table this would slow the health check; we'd switch to a cheaper sentinel (e.g. `EXISTS (SELECT 1 FROM chunks LIMIT 1)`). Not a concern at our scale.
+
+### CORS locked to `http://localhost:3000`, methods `GET, POST`
+**Choice:** Only the Next.js dev origin, only the methods we actually expose.
+**Why:** No public deployment, no third-party callers. Tight CORS is the default; loosen only if a real use case appears. `allow_credentials=True` is needed for `fetch()` with cookies, even though we don't currently use cookies — keeps the option open without a config change.
+**Tradeoff:** Deploying to a custom domain later means adding it to `allow_origins`. One-line edit.
+
+---
 
 ## Phase 7 — UI *(to be appended)*
