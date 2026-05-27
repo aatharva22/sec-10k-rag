@@ -30,9 +30,9 @@ question ──► query_parser (extract ticker, fiscal_year)
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Scaffold | ✅ done |
-| 1 | Ingestion (15 10-Ks from EDGAR) | ✅ done |
-| 2 | Parse + chunk (selectolax + canonical-title chunker) | ✅ done |
+| 0 | Scaffold | done |
+| 1 | Ingestion (15 10-Ks from EDGAR) | done |
+| 2 | Parse + chunk (selectolax + canonical-title chunker) | done |
 | 3 | Embed + store + indexes | done (15/15 filings, 1,531 chunks) |
 | 4 | Retrieval service (hybrid + RRF) | done |
 | 5 | Generation service (Gemini, swappable) | done |
