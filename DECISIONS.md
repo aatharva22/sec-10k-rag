@@ -277,4 +277,33 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 ---
 
-## Phase 7 — UI *(to be appended)*
+## Phase 7 — UI
+
+### Built by a constrained subagent — `web/` only, no backend touches
+**Choice:** Phase 7 was delegated to a Claude Code subagent with the full UI spec inlined, scoped to `web/`, and explicitly forbidden from touching `api/`, `ingestion/`, `sql/`, `DECISIONS.md`, `README.md`, or running git. The agent scaffolded Next.js 14 + TypeScript + Tailwind from scratch (no `create-next-app`, because that CLI is interactive), built 7 small components + 3 lib modules, ran `tsc --noEmit` + `next lint` + a curl smoke test on `:3000`, and returned a 300-word report.
+**Why:** Frontend work is bounded and doesn't need the same context as the backend pipeline. Delegating let the main session keep working backend context warm; the agent treated the API contract as the only interface, which mirrors how a real frontend developer would join the project.
+**Tradeoff:** Less inline reasoning in the main session's transcript. Mitigated by the agent's structured return summary (components built, decisions made, caveats) and a follow-up live end-to-end test from the main session: both servers booted, the frontend HTML rendered with the right header / chips / composer, the backend round-trip worked through real CORS, and the refusal path (empty citations + exact `REFUSAL_TEXT`) was triggered.
+
+### Tooling switched from pnpm to npm
+**Choice:** Removed `pnpm-lock.yaml`, regenerated as `package-lock.json` via `npm install`. The agent scaffolded with pnpm because that's what was available on the machine.
+**Why:** pnpm 11 runs a `runDepsStatusCheck` gate before every `pnpm dev` / `pnpm lint` / `pnpm exec` that exits non-zero whenever any package has an "ignored build script" — in our case `unrs-resolver`, a transitive of `eslint-config-next`. The standard remedies all failed cleanly: `pnpm approve-builds` is interactive (no flag for non-interactive approval); `pnpm.onlyBuiltDependencies` in `package.json` is deprecated in pnpm 11 (warning emitted, setting ignored); `pnpm-workspace.yaml` with the same key isn't read in single-package mode; `.npmrc` `verify-deps-before-run=false` is documented but didn't disable the gate. `npm run dev` boots Next.js in ~1s with no fuss. For a project where anyone cloning the repo should be able to run it with vanilla tooling, npm is the better default. `unrs-resolver`'s install script is only used at lint time and not building it doesn't affect anything we run.
+**Tradeoff:** pnpm's content-addressable store is faster on cold cache; lost that. For a one-developer demo this is invisible.
+
+### Refusal detection is client-side, by string match
+**Choice:** `lib/types.ts` exports `REFUSAL_TEXT` as a constant matching the backend's `REFUSAL` string byte-for-byte. The `Chat` component checks `answer === REFUSAL_TEXT && citations.length === 0` to render the muted-italic refusal bubble instead of a normal assistant bubble.
+**Why:** The backend's 200/empty-citations design (Phase 5) was an intentional choice to keep failure modes off the wire status code — that means the UI is the right place to detect the refusal shape. A separate HTTP status (e.g. 204 No Content) would have been an alternative but it would conflate "we don't know" with "request was malformed" or "you don't have access".
+**Tradeoff:** If the backend's refusal string ever drifts by even one character, the UI silently falls through to the normal-answer rendering with an empty Sources strip. The fix is a single-line edit in `lib/types.ts`. If we want to be defensive, we could expose the refusal flag on the response payload itself — premature for now.
+
+### Per-ticker color pills (slate / sky / amber / rose / emerald)
+**Choice:** Distinct stable hue per ticker in `lib/tickers.ts`. Pastel 200-shade fills with 900-shade text so they're legible on the dark surface.
+**Why:** Citations frequently span multiple tickers for comparative questions (e.g. Tesla vs NVIDIA). Color pills let the user see at a glance which excerpts came from which company without reading the label.
+**Tradeoff:** Adding a 6th ticker requires picking a hue. Trivial; we'd just extend the map.
+
+### No streaming, no persistence
+**Choice:** The full answer arrives in one POST response; a shimmer skeleton fills the assistant bubble while waiting (~1-3s for `gemini-2.5-flash`). Conversation history is in-memory only.
+**Why:** Streaming would require switching Gemini to `generate_content_stream` and adapting the FastAPI route to return an `EventSourceResponse` — non-trivial work for a 1-3 second wait. Persistence would require a `conversations` table — more schema, more endpoints, no demo value for an interview project.
+**Tradeoff:** Refresh wipes the chat. Acceptable; the URL is also a single page so the back button doesn't conflict.
+
+---
+
+## Phase 8 — Demo polish *(to be appended)*

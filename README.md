@@ -37,7 +37,7 @@ question ──► query_parser (extract ticker, fiscal_year)
 | 4 | Retrieval service (hybrid + RRF) | done |
 | 5 | Generation service (Gemini, swappable) | done |
 | 6 | FastAPI wiring | done |
-| 7 | Next.js chat UI | — |
+| 7 | Next.js chat UI | done |
 | 8 | README polish + demo script | — |
 
 ## Quick start (will be filled in as phases land)
