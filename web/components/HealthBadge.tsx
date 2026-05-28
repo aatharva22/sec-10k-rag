@@ -1,45 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { getHealth } from "@/lib/api";
-import type { HealthResponse } from "@/lib/types";
-
-type State =
-  | { kind: "loading" }
-  | { kind: "healthy"; data: HealthResponse }
-  | { kind: "unreachable" };
+import { useHealth } from "./HealthProvider";
 
 export default function HealthBadge() {
-  const [state, setState] = useState<State>({ kind: "loading" });
+  const { status, data } = useHealth();
 
-  useEffect(() => {
-    let active = true;
-    void getHealth().then((data) => {
-      if (!active) return;
-      if (data && data.status === "ok") {
-        setState({ kind: "healthy", data });
-      } else {
-        setState({ kind: "unreachable" });
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  if (state.kind === "loading") {
+  if (status === "checking") {
     return (
       <div className="flex items-center gap-2 text-xs text-muted">
         <span
           aria-hidden="true"
           className="inline-block h-2 w-2 rounded-full bg-muted/60"
         />
-        <span>checking…</span>
+        <span>checking&hellip;</span>
       </div>
     );
   }
 
-  if (state.kind === "healthy") {
+  if (status === "booting") {
+    return (
+      <div
+        className="flex items-center gap-2 text-xs text-muted"
+        title="Backend is waking up"
+      >
+        <span
+          aria-hidden="true"
+          className="inline-block h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]"
+        />
+        <span>waking up&hellip;</span>
+      </div>
+    );
+  }
+
+  if (status === "healthy") {
     return (
       <div
         className="flex items-center gap-2 text-xs text-muted"
@@ -50,7 +43,7 @@ export default function HealthBadge() {
           className="inline-block h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]"
         />
         <span>
-          healthy &middot; {state.data.chunks.toLocaleString()} chunks
+          healthy{data ? ` · ${data.chunks.toLocaleString()} chunks` : ""}
         </span>
       </div>
     );
