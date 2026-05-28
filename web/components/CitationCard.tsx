@@ -2,6 +2,7 @@
 
 import type { Citation } from "@/lib/types";
 import { tickerStyle } from "@/lib/tickers";
+import { buildSourceLink } from "@/lib/source-link";
 
 interface Props {
   citation: Citation;
@@ -63,7 +64,7 @@ export default function CitationCard({ citation }: Props) {
 
   return (
     <a
-      href={citation.source_url as string}
+      href={buildSourceLink(citation.source_url as string, citation.quote)}
       target="_blank"
       rel="noopener noreferrer"
       title={citation.quote}
