@@ -45,6 +45,25 @@ Open the [live demo](https://sec-10k-rag.vercel.app) and try these — each exer
 
 **Citations are deep-linked.** Click any citation card and the SEC filing opens scrolled to (and highlighting) the exact quoted text — uses the browser's [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments) syntax (`#:~:text=…`). Works in Chromium and Safari 16.1+; Firefox lands at the top of the page.
 
+**Inspect the retrieval, not just the answer.** Filter chips above the composer scope every query to a specific ticker or fiscal year. Each assistant message includes a latency badge with a `retrieve/generate` ms breakdown. Hit "Show retrieval details" on any answer to see, per citation, which ranker found it: `BM25 #3 · Vec #1 · RRF 0.0323`. RRF is doing real work; the UI lets you see it.
+
+## Evaluation
+
+See [`eval/`](./eval) for a small grounded-RAG eval harness that runs against the live `/query` endpoint. Four metrics, no LLM judge:
+
+- **Exact grounding** — is each citation a verbatim substring of its cited chunk?
+- **Fuzzy grounding** — ≥70% word-set overlap (catches paraphrased-but-correct citations)
+- **Refusal rate** — on out-of-corpus questions, did the LLM **choose** to refuse? (distinct from "API call failed", via the response's `refusal_source` field)
+- **Citation count distribution** — mean / min / max per answered question
+
+20 hand-curated questions (15 in-corpus across all 5 tickers + 5 out-of-corpus). Run with:
+
+```bash
+EVAL_API_URL=http://localhost:8000 uv run python -m eval.run_eval
+```
+
+The harness correctly skips upstream errors (e.g. Gemini quota) instead of counting them as test failures — see [`eval/README.md`](./eval/README.md) for the full methodology.
+
 ## Quick start (local dev)
 
 You'll need: Docker, [`uv`](https://docs.astral.sh/uv/), Node 20+, and a [Gemini API key](https://aistudio.google.com/apikey).
@@ -131,4 +150,5 @@ Free-tier caveats: Render web services sleep after 15 min idle and take ~30–50
 - `ingestion/` — `download_filings → parse_filings → chunk_filings → embed_and_store → pipeline`
 - `api/` — FastAPI app: `main.py`, `routes/`, `services/{query_parser,retrieval,generation}.py`
 - `web/` — Next.js chat UI; entry points at `app/page.tsx` and `components/Chat.tsx`
+- `eval/` — grounded-RAG eval harness: `questions.jsonl` + `run_eval.py` + `README.md`
 - `.claude/skills/` — domain playbooks for `parse-10k`, `hybrid-retrieval`, `grounded-generation`

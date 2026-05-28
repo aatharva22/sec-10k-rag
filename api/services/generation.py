@@ -71,7 +71,7 @@ class _LLMAnswer(BaseModel):
 
 def generate(question: str, chunks: list[Chunk]) -> AnswerWithCitations:
     if not chunks:
-        return AnswerWithCitations(answer=REFUSAL, citations=[])
+        return AnswerWithCitations(answer=REFUSAL, citations=[], refusal_source="error")
 
     context = _format_chunks(chunks)
     user_prompt = f"Question: {question}\n\nExcerpts:\n{context}\n\nAnswer using only these excerpts."
@@ -81,10 +81,10 @@ def generate(question: str, chunks: list[Chunk]) -> AnswerWithCitations:
         parsed = _LLMAnswer.model_validate_json(raw)
     except (ValidationError, json.JSONDecodeError, ValueError) as exc:
         print(f"  generation: parse failure ({type(exc).__name__}: {exc}) — refusing")
-        return AnswerWithCitations(answer=REFUSAL, citations=[])
+        return AnswerWithCitations(answer=REFUSAL, citations=[], refusal_source="error")
     except Exception as exc:  # noqa: BLE001 — SDK error surface is broad
         print(f"  generation: API failure ({type(exc).__name__}: {exc}) — refusing")
-        return AnswerWithCitations(answer=REFUSAL, citations=[])
+        return AnswerWithCitations(answer=REFUSAL, citations=[], refusal_source="error")
 
     return _build_response(parsed, chunks)
 
@@ -121,8 +121,6 @@ def _build_response(parsed: _LLMAnswer, chunks: list[Chunk]) -> AnswerWithCitati
     for raw_cit in parsed.citations:
         src = by_id.get(raw_cit.chunk_id)
         if src is None:
-            # Defend against hallucinated chunk_ids — drop silently rather
-            # than let an unknown id leak to the user.
             continue
         citations.append(
             Citation(
@@ -132,9 +130,19 @@ def _build_response(parsed: _LLMAnswer, chunks: list[Chunk]) -> AnswerWithCitati
                 section=src.section,
                 quote=raw_cit.quote,
                 source_url=src.source_url,
+                bm25_rank=src.bm25_rank,
+                vector_rank=src.vector_rank,
+                rrf_score=src.rrf_score,
             )
         )
-    return AnswerWithCitations(answer=parsed.answer, citations=citations)
+    # If the LLM emitted the REFUSAL string with no citations, that's a
+    # voluntary refusal (rule 3 in the system prompt). Tag it so eval can tell.
+    is_llm_refusal = parsed.answer.strip() == REFUSAL and not citations
+    return AnswerWithCitations(
+        answer=parsed.answer,
+        citations=citations,
+        refusal_source="llm" if is_llm_refusal else None,
+    )
 
 
 def _cli() -> None:

@@ -44,17 +44,25 @@ def hybrid_search(
     where_sql, where_params = _build_where(ticker, fiscal_year)
 
     with sync_conn() as conn, conn.cursor() as cur:
-        bm25_rows = _bm25_search(cur, question, where_sql, where_params)
-        vec_rows = _vector_search(cur, qvec, where_sql, where_params)
+        bm25_ids = [row[0] for row in _bm25_search(cur, question, where_sql, where_params)]
+        vec_ids = [row[0] for row in _vector_search(cur, qvec, where_sql, where_params)]
 
-        fused_ids = _rrf_fuse(
-            [row[0] for row in bm25_rows],
-            [row[0] for row in vec_rows],
-        )[:top_k]
-        if not fused_ids:
+        fused = _rrf_fuse(bm25_ids, vec_ids)
+        if not fused:
             return []
 
-        return _hydrate(cur, fused_ids)
+        top_ids = [cid for cid, _ in fused[:top_k]]
+        chunks = _hydrate(cur, top_ids)
+
+        # Stamp retrieval debug info onto each chunk.
+        bm25_rank_by_id = {cid: i + 1 for i, cid in enumerate(bm25_ids)}
+        vec_rank_by_id = {cid: i + 1 for i, cid in enumerate(vec_ids)}
+        rrf_score_by_id = dict(fused)
+        for c in chunks:
+            c.bm25_rank = bm25_rank_by_id.get(c.id)
+            c.vector_rank = vec_rank_by_id.get(c.id)
+            c.rrf_score = rrf_score_by_id.get(c.id)
+        return chunks
 
 
 def _build_where(ticker: str | None, fiscal_year: int | None) -> tuple[str, list]:
@@ -97,14 +105,18 @@ def _vector_search(cur, qvec: list[float], where_sql: str, where_params: list) -
     return cur.fetchall()
 
 
-def _rrf_fuse(bm25_ids: Sequence[int], vec_ids: Sequence[int]) -> list[int]:
-    """Reciprocal Rank Fusion: combine two ranked lists into one."""
+def _rrf_fuse(bm25_ids: Sequence[int], vec_ids: Sequence[int]) -> list[tuple[int, float]]:
+    """Reciprocal Rank Fusion: combine two ranked lists into one.
+
+    Returns (chunk_id, score) pairs sorted by score descending. Callers that
+    only care about ids can pull `cid for cid, _ in result`.
+    """
     scores: dict[int, float] = {}
     for rank, cid in enumerate(bm25_ids, start=1):
         scores[cid] = scores.get(cid, 0.0) + 1.0 / (RRF_K + rank)
     for rank, cid in enumerate(vec_ids, start=1):
         scores[cid] = scores.get(cid, 0.0) + 1.0 / (RRF_K + rank)
-    return sorted(scores, key=lambda cid: scores[cid], reverse=True)
+    return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
 
 def _hydrate(cur, ids_in_order: list[int]) -> list[Chunk]:

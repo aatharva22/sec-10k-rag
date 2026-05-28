@@ -5,9 +5,10 @@ import CitationCard from "./CitationCard";
 
 interface Props {
   citations: Citation[];
+  showDetails?: boolean;
 }
 
-export default function Citations({ citations }: Props) {
+export default function Citations({ citations, showDetails }: Props) {
   if (citations.length === 0) return null;
   return (
     <div className="mt-3">
@@ -16,7 +17,7 @@ export default function Citations({ citations }: Props) {
       </div>
       <div className="scroll-strip -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         {citations.map((c) => (
-          <CitationCard key={c.chunk_id} citation={c} />
+          <CitationCard key={c.chunk_id} citation={c} showDetails={showDetails} />
         ))}
       </div>
     </div>

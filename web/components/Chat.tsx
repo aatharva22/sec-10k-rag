@@ -2,91 +2,114 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, postQuery } from "@/lib/api";
-import { REFUSAL_TEXT, type Message } from "@/lib/types";
+import {
+  REFUSAL_TEXT,
+  type FiscalYear,
+  type Message,
+  type Ticker,
+} from "@/lib/types";
 import Composer from "./Composer";
 import ExampleChips from "./ExampleChips";
+import FilterChips from "./FilterChips";
+import HowItWorks from "./HowItWorks";
 import MessageBubble from "./MessageBubble";
 
 function makeId(): string {
-  // Avoid pulling in a uuid lib for one ID per message.
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inFlight, setInFlight] = useState(false);
+  const [filterTicker, setFilterTicker] = useState<Ticker | null>(null);
+  const [filterYear, setFilterYear] = useState<FiscalYear | null>(null);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll on new messages.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  const ask = useCallback(async (question: string) => {
-    const trimmed = question.trim();
-    if (!trimmed) return;
+  const ask = useCallback(
+    async (
+      question: string,
+      opts: { ticker?: Ticker | null; fiscalYear?: FiscalYear | null } = {},
+    ) => {
+      const trimmed = question.trim();
+      if (!trimmed) return;
 
-    const userMsg: Message = {
-      id: makeId(),
-      role: "user",
-      content: trimmed,
-      status: "ok",
-    };
-    const assistantId = makeId();
-    const pendingMsg: Message = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      status: "pending",
-      sourceQuestion: trimmed,
-    };
+      // Snapshot the filters in effect at submit time, so Retry preserves scope.
+      const usedTicker = opts.ticker !== undefined ? opts.ticker : filterTicker;
+      const usedYear = opts.fiscalYear !== undefined ? opts.fiscalYear : filterYear;
 
-    setMessages((prev) => [...prev, userMsg, pendingMsg]);
-    setInFlight(true);
+      const userMsg: Message = {
+        id: makeId(),
+        role: "user",
+        content: trimmed,
+        status: "ok",
+      };
+      const assistantId = makeId();
+      const pendingMsg: Message = {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        status: "pending",
+        sourceQuestion: trimmed,
+        sourceTicker: usedTicker,
+        sourceFiscalYear: usedYear,
+      };
 
-    try {
-      const data = await postQuery(trimmed);
-      const isRefusal =
-        data.citations.length === 0 && data.answer.trim() === REFUSAL_TEXT;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: data.answer,
-                citations: data.citations,
-                status: isRefusal ? "refusal" : "ok",
-              }
-            : m,
-        ),
-      );
-    } catch (err) {
-      const msg =
-        err instanceof ApiError
-          ? err.status === 503
-            ? "Backend is temporarily unavailable. Please retry."
-            : err.message
-          : err instanceof Error
-            ? err.message
-            : "Unexpected error.";
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, status: "error", error: msg }
-            : m,
-        ),
-      );
-    } finally {
-      setInFlight(false);
-    }
-  }, []);
+      setMessages((prev) => [...prev, userMsg, pendingMsg]);
+      setInFlight(true);
+
+      try {
+        const data = await postQuery(trimmed, {
+          ticker: usedTicker,
+          fiscalYear: usedYear,
+        });
+        const isRefusal =
+          data.citations.length === 0 && data.answer.trim() === REFUSAL_TEXT;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: data.answer,
+                  citations: data.citations,
+                  timing: data.timing,
+                  retrievedCount: data.retrieved_count,
+                  status: isRefusal ? "refusal" : "ok",
+                }
+              : m,
+          ),
+        );
+      } catch (err) {
+        const msg =
+          err instanceof ApiError
+            ? err.status === 503
+              ? "Backend is temporarily unavailable. Please retry."
+              : err.message
+            : err instanceof Error
+              ? err.message
+              : "Unexpected error.";
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, status: "error", error: msg }
+              : m,
+          ),
+        );
+      } finally {
+        setInFlight(false);
+      }
+    },
+    [filterTicker, filterYear],
+  );
 
   const handleChipPick = useCallback(
     (q: string) => {
-      // Immediately submit chip questions per spec.
       void ask(q);
     },
     [ask],
@@ -94,10 +117,9 @@ export default function Chat() {
 
   const handleRetry = useCallback(
     (q: string) => {
-      // Drop the failed assistant message + its preceding user echo,
-      // then re-ask so the conversation reads cleanly.
+      let usedTicker: Ticker | null = filterTicker;
+      let usedYear: FiscalYear | null = filterYear;
       setMessages((prev) => {
-        // Find the trailing error message tied to q.
         let cutFrom = prev.length;
         for (let i = prev.length - 1; i >= 0; i--) {
           const m = prev[i];
@@ -106,37 +128,31 @@ export default function Chat() {
             m.status === "error" &&
             m.sourceQuestion === q
           ) {
-            // Also strip the user message immediately before it.
+            // Reuse the original scope so Retry is a true re-attempt.
+            usedTicker = m.sourceTicker ?? null;
+            usedYear = m.sourceFiscalYear ?? null;
             cutFrom = i - 1 >= 0 && prev[i - 1].role === "user" ? i - 1 : i;
             break;
           }
         }
         return prev.slice(0, cutFrom);
       });
-      void ask(q);
+      void ask(q, { ticker: usedTicker, fiscalYear: usedYear });
     },
-    [ask],
+    [ask, filterTicker, filterYear],
   );
 
   const isEmpty = messages.length === 0;
 
   return (
     <>
-      <div
-        ref={scrollerRef}
-        className="flex-1 overflow-y-auto"
-        aria-live="polite"
-      >
+      <div ref={scrollerRef} className="flex-1 overflow-y-auto" aria-live="polite">
         <div className="mx-auto max-w-3xl px-4 py-6">
           {isEmpty ? (
             <section className="rounded-2xl border border-border bg-surface p-6 sm:p-8">
               <div className="flex items-start gap-3">
                 <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    className="h-5 w-5"
-                  >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5">
                     <path
                       fill="currentColor"
                       d="M4 4h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-4 4V4zm2 2v12.17L7.17 18H16a 1 1 0 0 0 1-1V6a 1 1 0 0 0-1-1H6z"
@@ -149,12 +165,15 @@ export default function Chat() {
                   </h2>
                   <p className="mt-1 text-sm text-muted">
                     Ask a question about Apple, Microsoft, Amazon, Tesla, or
-                    NVIDIA 10-K filings (FY2022&ndash;2024). Answers are
-                    grounded in retrieved excerpts, with citations linking
-                    back to the original filing on EDGAR.
+                    NVIDIA 10-K filings (FY2022&ndash;2024). Answers are grounded
+                    in retrieved excerpts, with citations linking back to the
+                    original filing on EDGAR.
                   </p>
                 </div>
               </div>
+
+              <HowItWorks />
+
               <div className="mt-5">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">
                   Try one of these
@@ -176,6 +195,15 @@ export default function Chat() {
 
       <div className="sticky bottom-0 border-t border-border bg-bg/95 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-3">
+          <div className="mb-2">
+            <FilterChips
+              ticker={filterTicker}
+              fiscalYear={filterYear}
+              onTickerChange={setFilterTicker}
+              onYearChange={setFilterYear}
+              disabled={inFlight}
+            />
+          </div>
           <Composer onSubmit={(q) => void ask(q)} disabled={inFlight} />
           <div className="mt-1.5 px-1 text-[11px] text-muted">
             Press <kbd className="rounded bg-surface-2 px-1 py-0.5">Enter</kbd>{" "}
@@ -186,7 +214,6 @@ export default function Chat() {
           </div>
         </div>
       </div>
-
     </>
   );
 }

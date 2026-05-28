@@ -1,0 +1,20 @@
+{"id": "aapl-competitive-factors", "category": "in_corpus", "question": "What does Apple list as its principal competitive factors?", "expected_ticker": "AAPL"}
+{"id": "aapl-china-manufacturing", "category": "in_corpus", "question": "Where does Apple manufacture most of its products and what risk does that concentration create?", "expected_ticker": "AAPL"}
+{"id": "aapl-services-revenue", "category": "in_corpus", "question": "Describe Apple's Services segment offerings", "expected_ticker": "AAPL"}
+{"id": "msft-azure", "category": "in_corpus", "question": "How does Microsoft describe its Intelligent Cloud segment and Azure positioning?", "expected_ticker": "MSFT"}
+{"id": "msft-ai-investment", "category": "in_corpus", "question": "What does Microsoft say about its AI investments?", "expected_ticker": "MSFT"}
+{"id": "amzn-aws", "category": "in_corpus", "question": "How does Amazon describe AWS customers and what they use it for?", "expected_ticker": "AMZN"}
+{"id": "amzn-prime", "category": "in_corpus", "question": "What benefits does Amazon Prime membership include?", "expected_ticker": "AMZN"}
+{"id": "tsla-battery-supply", "category": "in_corpus", "question": "How does Tesla describe its lithium-ion battery supply chain risks?", "expected_ticker": "TSLA"}
+{"id": "tsla-manufacturing", "category": "in_corpus", "question": "Where are Tesla's principal vehicle manufacturing facilities?", "expected_ticker": "TSLA"}
+{"id": "nvda-export-controls", "category": "in_corpus", "question": "What does NVIDIA say about U.S. export controls on its AI chips?", "expected_ticker": "NVDA"}
+{"id": "nvda-data-center", "category": "in_corpus", "question": "How does NVIDIA describe its Data Center segment?", "expected_ticker": "NVDA"}
+{"id": "cross-cloud-competition", "category": "in_corpus", "question": "How do Microsoft and Amazon describe cloud computing competition?", "expected_ticker": null}
+{"id": "cross-supply-chain", "category": "in_corpus", "question": "Compare Tesla and NVIDIA risk factors related to supply chain disruption", "expected_ticker": null}
+{"id": "aapl-2023-risk", "category": "in_corpus", "question": "What were Apple's biggest risk factors in fiscal 2023?", "expected_ticker": "AAPL", "expected_year": 2023}
+{"id": "nvda-2024-revenue", "category": "in_corpus", "question": "What revenue trends does NVIDIA discuss in fiscal 2024?", "expected_ticker": "NVDA", "expected_year": 2024}
+{"id": "ooc-france-gdp", "category": "out_of_corpus", "question": "What was the GDP of France in 2023?"}
+{"id": "ooc-weather", "category": "out_of_corpus", "question": "What is the weather forecast for New York tomorrow?"}
+{"id": "ooc-personal", "category": "out_of_corpus", "question": "What is the recommended dosage of ibuprofen for an adult?"}
+{"id": "ooc-recipe", "category": "out_of_corpus", "question": "How do I make a perfect French omelette?"}
+{"id": "ooc-recent-event", "category": "out_of_corpus", "question": "Who won the 2026 World Cup?"}

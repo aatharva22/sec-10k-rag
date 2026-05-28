@@ -1,11 +1,53 @@
 "use client";
 
+import { useState } from "react";
 import type { Message } from "@/lib/types";
 import Citations from "./Citations";
 
 interface Props {
   message: Message;
   onRetry?: (question: string) => void;
+}
+
+function formatSeconds(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function AnswerMeta({ message, expanded, onToggle }: {
+  message: Message;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const parts: string[] = [];
+  if (message.timing) {
+    parts.push(`Answered in ${formatSeconds(message.timing.total_ms)}`);
+  }
+  if (typeof message.retrievedCount === "number" && message.retrievedCount > 0) {
+    parts.push(`${message.retrievedCount} chunk${message.retrievedCount === 1 ? "" : "s"} retrieved`);
+  }
+  if (parts.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-2 text-[11px] text-muted">
+      <span>{parts.join(" · ")}</span>
+      {message.timing ? (
+        <span
+          className="font-mono"
+          title={`retrieve=${message.timing.retrieve_ms}ms · generate=${message.timing.generate_ms}ms`}
+        >
+          ({message.timing.retrieve_ms}ms retrieve / {message.timing.generate_ms}ms generate)
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="ml-auto rounded border border-border bg-surface-2 px-2 py-0.5 text-[10px] font-medium text-text/80 hover:border-accent/60 hover:text-text"
+      >
+        {expanded ? "Hide" : "Show"} retrieval details
+      </button>
+    </div>
+  );
 }
 
 function Skeleton() {
@@ -19,6 +61,7 @@ function Skeleton() {
 }
 
 export default function MessageBubble({ message, onRetry }: Props) {
+  const [showDetails, setShowDetails] = useState(false);
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -92,8 +135,13 @@ export default function MessageBubble({ message, onRetry }: Props) {
           {message.content}
         </div>
         {message.citations && message.citations.length > 0 ? (
-          <Citations citations={message.citations} />
+          <Citations citations={message.citations} showDetails={showDetails} />
         ) : null}
+        <AnswerMeta
+          message={message}
+          expanded={showDetails}
+          onToggle={() => setShowDetails((s) => !s)}
+        />
       </div>
     </div>
   );

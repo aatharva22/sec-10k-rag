@@ -6,9 +6,32 @@ import { buildSourceLink } from "@/lib/source-link";
 
 interface Props {
   citation: Citation;
+  showDetails?: boolean;
 }
 
-export default function CitationCard({ citation }: Props) {
+function RetrievalDetails({ citation }: { citation: Citation }) {
+  const parts: string[] = [];
+  if (citation.bm25_rank !== null) parts.push(`BM25 #${citation.bm25_rank}`);
+  if (citation.vector_rank !== null) parts.push(`Vec #${citation.vector_rank}`);
+  if (citation.rrf_score !== null && citation.rrf_score !== undefined) {
+    parts.push(`RRF ${citation.rrf_score.toFixed(4)}`);
+  }
+  if (parts.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1 text-[10px]">
+      {parts.map((p) => (
+        <span
+          key={p}
+          className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-muted"
+        >
+          {p}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export default function CitationCard({ citation, showDetails }: Props) {
   const style = tickerStyle(citation.ticker);
   const hasLink = typeof citation.source_url === "string" && citation.source_url.length > 0;
 
@@ -42,6 +65,7 @@ export default function CitationCard({ citation }: Props) {
       <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-muted">
         &ldquo;{citation.quote}&rdquo;
       </p>
+      {showDetails ? <RetrievalDetails citation={citation} /> : null}
     </>
   );
 

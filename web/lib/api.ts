@@ -1,4 +1,4 @@
-import type { HealthResponse, QueryResponse } from "./types";
+import type { FiscalYear, HealthResponse, QueryResponse, Ticker } from "./types";
 
 const DEFAULT_API_URL = "http://localhost:8000";
 
@@ -17,21 +17,35 @@ export class ApiError extends Error {
   }
 }
 
+export interface PostQueryOptions {
+  ticker?: Ticker | null;
+  fiscalYear?: FiscalYear | null;
+}
+
 /**
  * POST /query — ask the RAG backend a natural-language question.
+ *
+ * Optional `ticker` / `fiscalYear` scope the retrieval explicitly (overriding
+ * the backend's text-based parser). Used by the filter-chip UI.
  *
  * Throws ApiError with .status === 400 for an empty question, .status === 503
  * if the backend reports itself unhealthy, or no status when the network is
  * unreachable. The caller is expected to render a friendly retry surface.
  */
-export async function postQuery(question: string): Promise<QueryResponse> {
+export async function postQuery(
+  question: string,
+  opts: PostQueryOptions = {},
+): Promise<QueryResponse> {
   const url = `${apiBaseUrl()}/query`;
+  const body: Record<string, unknown> = { question };
+  if (opts.ticker) body.ticker = opts.ticker;
+  if (opts.fiscalYear) body.fiscal_year = opts.fiscalYear;
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(body),
     });
   } catch (err) {
     throw new ApiError(
