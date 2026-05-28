@@ -306,4 +306,40 @@ A running log of non-obvious choices and their tradeoffs. Each entry is honest a
 
 ---
 
-## Phase 8 — Demo polish *(to be appended)*
+## Phase 8 — Demo polish
+
+### README is the project's resume
+**Choice:** Lead with the live demo URL, then architecture, then a Demo table that names four specific questions and tells the reader exactly which code path each one exercises. Quick Start comes after that — the reader can decide whether they want to clone before they invest in setup.
+**Why:** A reviewer (interviewer or future-me) will read the top third and skim the rest. Architecture + Demo above Quick Start respects that — the project is the artifact, the setup instructions are just how to reproduce it.
+**Tradeoff:** Someone trying to clone-and-run has to scroll past the demo first. Acceptable; clone-and-run is the minority path for a portfolio repo.
+
+### Implemented `ingestion/download_filings.py` as a real CLI
+**Choice:** Replaced the docstring-only placeholder with a working httpx-based script that reads `manifest.json`, downloads each entry, verifies the sha256, and skips files that already have the right hash. SEC rate limited at ~7 req/s under their 10 req/s ceiling.
+**Why:** The Quick Start in the README would have lied if `python -m ingestion.download_filings` didn't actually work. The manifest already had everything needed (URL + sha256 per filing); not implementing the script meant a fresh clone couldn't reproduce the corpus without manual wget'ing.
+**Tradeoff:** The script presumes the user has set `SEC_USER_AGENT` in their env, and exits non-zero if not — same as the SEC's own gate. Failing fast with a clear error is better than letting curl-style 403s confuse the user.
+
+### Embedding model in README matches code, not the original spec
+**Choice:** README says `gemini-embedding-2`, not `gemini-embedding-001` from the original Phase 0 plan.
+**Why:** Phase 3 had to switch models because `001` is paid-only on the new Gemini billing. The README has to reflect what the code actually uses; otherwise a reader copy-pastes the model id and gets a 429.
+**Tradeoff:** None — the original plan is preserved in Phase 0 of DECISIONS for posterity.
+
+---
+
+## Deployment notes (not a phase, but worth recording)
+
+### Vercel + Render + Neon, three separate accounts
+**Why this split:** Each provider is the natural home for its slice. Vercel for Next.js (their bread-and-butter), Render for an always-on Python web service (their free tier accepts a Procfile and arbitrary deps), Neon for serverless Postgres with pgvector (everything else either requires payment beyond a trial or doesn't ship pgvector on free tier). All three have free tiers with no credit card required and no time-bound trial; the project will keep working indefinitely without paying.
+**Tradeoff:** Three dashboards to log into. For a portfolio that lives on a resume for 2+ years, that's fine. A multi-developer team with serious uptime needs would consolidate (Fly.io for backend + db, for instance).
+
+### Neon: direct endpoint, not pooler
+**Choice:** Use `ep-...c-8.us-east-1.aws.neon.tech` (no `-pooler`) in `DATABASE_URL`. The pooled endpoint runs pgbouncer in transaction mode.
+**Why:** The pooled endpoint doesn't apply role-level `search_path` defaults (pgbouncer resets state between transactions), and Neon refuses `options=-csearch_path=public` in the URL on the pooled endpoint. Our SQL uses unqualified `chunks` / `filings` so those queries would fail. For a single long-running backend process, the direct endpoint is the right choice anyway — psycopg has its own per-process connection pool, and pgbouncer's constraints (no prepared statements, no SET LOCAL persistence) don't buy us anything at this scale.
+**Tradeoff:** One process, one connection at a time. Render free tier serves one instance per service, so concurrency caps at whatever psycopg's per-process pool allows — invisible for our demo.
+
+### `CORS_ORIGINS` as an env var, not a hardcoded list
+**Choice:** `api/main.py` reads CORS allowed origins from a comma-separated `CORS_ORIGINS` env var, with `http://localhost:3000` always included as a baseline.
+**Why:** Adding a new frontend URL (Vercel preview deploys, custom domains, demo subdomains) is a Render env-var edit and a redeploy. No code commit needed. The localhost baseline means local dev never breaks even when the prod env var is set.
+**Tradeoff:** Misconfigured env var → silent CORS rejection. Mitigated by always echoing `Access-Control-Allow-Origin` in the response (when allowed) so the browser console shows clearly when it's missing.
+
+### Render free tier sleep is the demo's one rough edge
+**Reality:** Render free web services sleep after 15 min idle and take 30–50s to wake. The frontend's HealthBadge shows red for that window. We accept this trade for the $0/month price tag. Optional fix (deferred): a UptimeRobot or cron-job.org ping at 14 min intervals — keeps the service warm but uses up the 750 service-hours/month budget faster.

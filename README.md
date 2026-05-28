@@ -1,30 +1,101 @@
 # SEC 10-K RAG
 
-Chat with SEC 10-K filings for AAPL, MSFT, AMZN, TSLA, NVDA across fiscal years 2022–2024. Hybrid retrieval (BM25 + vector) fused with Reciprocal Rank Fusion, grounded answers with citations, Gemini for generation.
+A grounded chat interface over the 10-K filings of Apple, Microsoft, Amazon, Tesla, and NVIDIA across fiscal years 2022–2024. Every answer is supported by verbatim citations that link directly to the highlighted passage on SEC EDGAR.
 
-> The project root is this directory directly (no nested `sec-rag/`). All paths in the implementation plan that reference `sec-rag/<x>` map to `./<x>` here.
+**Live demo:** https://sec-10k-rag.vercel.app
+**Backend:** https://sec-10k-rag-hg9w.onrender.com (cold start ~30–50s after 15 min idle — free tier)
+
+The retrieval is hybrid (BM25 + dense vector, fused with Reciprocal Rank Fusion); generation is Gemini `gemini-2.5-flash` with grammar-constrained JSON output. The full design rationale is in [`DECISIONS.md`](./DECISIONS.md).
 
 ## Architecture
 
 ```
 question ──► query_parser (extract ticker, fiscal_year)
          ──► Postgres metadata filter
-         ──► BM25 (tsvector) top-20  ┐
-                                      ├── parallel
-         ──► Vector (pgvector cosine) top-20 ┘
-         ──► RRF fuse (k=60) → top-5
+         ──► BM25 (tsvector)         top-20  ┐
+                                              ├── RRF fuse (k=60) → top-5
+         ──► Vector (pgvector cosine) top-20  ┘
          ──► Gemini gemini-2.5-flash + citation-enforcing system prompt
          ──► { answer, citations[] }
 ```
 
+The same Postgres database holds vectors (`pgvector` HNSW), full-text (`tsvector` + GIN), and metadata — one store, three SELECTs, no orchestration between systems.
+
 ## Stack
 
-- **Python 3.11+** with `uv` for env/deps
-- **FastAPI** for the backend
-- **PostgreSQL 16 + pgvector** for vectors, BM25 (tsvector), and metadata in one place
-- **Google Gemini** — `gemini-embedding-001` (768-dim) + `gemini-2.5-flash`
-- **Next.js 14** (App Router) + TypeScript + Tailwind for the UI
-- **Docker Compose** for Postgres
+| Layer | Tech | Hosted on |
+|---|---|---|
+| Frontend | Next.js 14 (App Router) + TypeScript + Tailwind | Vercel |
+| Backend | FastAPI on Python 3.11 + `uv` | Render |
+| Database | PostgreSQL 17 + `pgvector` 0.8 | Neon |
+| Embeddings | `gemini-embedding-2`, 768-dim (MRL-truncated from 3072) | Google Gemini API |
+| Generation | `gemini-2.5-flash`, grammar-constrained JSON | Google Gemini API |
+| Local DB | Same Postgres image via Docker Compose | docker |
+
+## Demo
+
+Open the [live demo](https://sec-10k-rag.vercel.app) and try these — each exercises a different code path. (First request after the backend has been idle for 15+ minutes takes ~30s to wake; subsequent answers arrive in ~3–5s.)
+
+| Question | What it tests |
+|---|---|
+| *"What does Apple list as its principal competitive factors?"* | Single-filing factual lookup. The parser extracts `ticker=AAPL`, hybrid retrieval narrows to AAPL chunks, generation returns one tight answer with 2 verbatim citations. |
+| *"How does NVIDIA describe export controls on AI chips?"* | Semantic match. The phrase "export controls" appears across multiple NVDA filings; the vector ranker picks the relevant Risk Factors passages even where wording differs. |
+| *"Compare Tesla and NVIDIA risk factors related to supply chain"* | Cross-ticker. The parser returns `ticker=None` (deliberate — two tickers mentioned), retrieval falls back to corpus-wide, and the LLM grounds its comparison in citations from both companies. |
+| *"What was the GDP of France in 2023?"* | Refusal path. The LLM is instructed to refuse with a verbatim string when context is insufficient; the UI detects that string and renders a muted refusal bubble with no citations. |
+
+**Citations are deep-linked.** Click any citation card and the SEC filing opens scrolled to (and highlighting) the exact quoted text — uses the browser's [Text Fragment](https://developer.mozilla.org/en-US/docs/Web/Text_fragments) syntax (`#:~:text=…`). Works in Chromium and Safari 16.1+; Firefox lands at the top of the page.
+
+## Quick start (local dev)
+
+You'll need: Docker, [`uv`](https://docs.astral.sh/uv/), Node 20+, and a [Gemini API key](https://aistudio.google.com/apikey).
+
+```bash
+# 1. clone + Python env
+git clone https://github.com/aatharva22/sec-10k-rag.git
+cd sec-10k-rag
+uv sync
+
+# 2. start local Postgres (with pgvector)
+docker compose up -d
+
+# 3. env vars
+cp .env.example .env
+# then edit .env to set:
+#   GEMINI_API_KEY=...
+#   SEC_USER_AGENT="Your Name your.email@example.com"
+
+# 4. ingest the corpus (~25 min on a fresh Gemini free-tier key)
+#    re-downloads the 15 10-Ks from EDGAR, parses, chunks, embeds, inserts.
+uv run python -m ingestion.download_filings   # populates data/filings/
+uv run python -m ingestion.pipeline           # parse → chunk → embed → insert
+
+# 5. backend
+uv run uvicorn api.main:app --reload
+# → http://localhost:8000  (GET /health, POST /query)
+
+# 6. frontend (in a second terminal)
+cd web
+npm install
+npm run dev
+# → http://localhost:3000
+```
+
+**One gotcha:** the ingestion step burns ~1,531 Gemini embedding calls. On the free tier (1,000 calls/day) you'll hit the daily quota partway through — the pipeline picks up where it left off when you re-run it after midnight Pacific. The full DECISIONS.md Phase 3 entry has the gory details.
+
+## Smoke tests (after ingestion)
+
+```bash
+# pure-vector cosine search
+uv run python -m ingestion.search "Apple risk factors" --ticker AAPL --year 2023
+
+# hybrid (BM25 + vector + RRF)
+uv run python -m api.services.retrieval "supply chain disruption" --top-k 5
+
+# end-to-end (parser → retrieval → generation)
+uv run python -m api.services.generation "What does Apple list as its principal competitive factors?"
+```
+
+Each prints the query, the retrieved chunks, and (for the last one) the grounded answer with citations.
 
 ## Status
 
@@ -38,33 +109,26 @@ question ──► query_parser (extract ticker, fiscal_year)
 | 5 | Generation service (Gemini, swappable) | done |
 | 6 | FastAPI wiring | done |
 | 7 | Next.js chat UI | done |
-| 8 | README polish + demo script | — |
+| 8 | README polish + demo script | done |
 
-## Quick start (will be filled in as phases land)
+## Deployment
 
-```bash
-# 1. Postgres
-docker compose up -d
+The three services are independent and on separate providers:
 
-# 2. Python env
-uv sync
+- **Vercel** (frontend) — root directory set to `web/`, `NEXT_PUBLIC_API_URL` env var points at the Render URL.
+- **Render** (backend) — `Procfile` defines the start command, build runs `pip install uv && uv sync --frozen`. Env vars: `GEMINI_API_KEY`, `DATABASE_URL` (the Neon **direct** endpoint, not the pooler), and `CORS_ORIGINS` (the Vercel URL).
+- **Neon** (database) — pgvector enabled, schema applied from `sql/001_init.sql`, data restored from a `pg_dump --data-only` of the local Postgres. Use the non-pooled endpoint so role-level `search_path` defaults apply.
 
-# 3. Copy env template, fill in GEMINI_API_KEY + SEC_USER_AGENT
-cp .env.example .env
-
-# (later phases will add: ingestion, API server, web UI)
-```
+Free-tier caveats: Render web services sleep after 15 min idle and take ~30–50s to wake. Neon compute suspends after 5 min idle but wakes in 1–2s. Gemini free tier caps at 1,000 embeddings/day.
 
 ## Files
 
-- [`DECISIONS.md`](./DECISIONS.md) — every non-obvious choice and why
-- [`docker-compose.yml`](./docker-compose.yml) — Postgres + pgvector
-- [`pyproject.toml`](./pyproject.toml) — Python deps via uv
-- [`sql/001_init.sql`](./sql/001_init.sql) — DB schema (Phase 3)
-- `ingestion/` — download → parse → chunk → embed pipeline
-- `api/` — FastAPI app and retrieval/generation services
-- `web/` — Next.js chat UI (Phase 7)
-
-## Demo (Phase 8)
-
-A scripted 2-minute walkthrough with 5 example questions will live in `demo.md`.
+- [`DECISIONS.md`](./DECISIONS.md) — every non-obvious choice and the trade-off it cost
+- [`docker-compose.yml`](./docker-compose.yml) — local Postgres + pgvector
+- [`pyproject.toml`](./pyproject.toml) — Python deps via `uv`
+- [`Procfile`](./Procfile) — Render start command
+- [`sql/001_init.sql`](./sql/001_init.sql) — DB schema (tables, HNSW + GIN + btree indexes)
+- `ingestion/` — `download_filings → parse_filings → chunk_filings → embed_and_store → pipeline`
+- `api/` — FastAPI app: `main.py`, `routes/`, `services/{query_parser,retrieval,generation}.py`
+- `web/` — Next.js chat UI; entry points at `app/page.tsx` and `components/Chat.tsx`
+- `.claude/skills/` — domain playbooks for `parse-10k`, `hybrid-retrieval`, `grounded-generation`
